@@ -201,6 +201,7 @@ def get_1kg_ref(
         "--rm-dup exclude-all",
         "--max-alleles 2",
         "--mac 5",
+        "--nonfounders",
         "--snps-only",
         "--chr 1-22",
         "--set-all-var-ids @:#:\$r:\$a",
