@@ -10,6 +10,7 @@ import admix
 from statsmodels.tools import sm_exceptions
 import warnings
 import itertools
+from numpy.linalg import LinAlgError #new
 
 warnings.filterwarnings(action="error", category=sm_exceptions.ValueWarning)
 
@@ -243,23 +244,46 @@ def _block_test(
 
         res = np.zeros((n_var, var_size * 2 + 2))
 
+        #here starts the new code suggestion
         for i in range(n_var):
-            design[:, 0:var_size] = var[:, i * var_size : (i + 1) * var_size]
-            model = reg_method(pheno, design)
-            # coefficients
-            res[i, 0 : var_size * 2 : 2] = model.params[0:var_size]
-            # standard errors
-            res[i, 1 : var_size * 2 : 2] = model.bse[0:var_size]
-            res[i, -2] = model.nobs
-            # sample size
-            if family == "linear":
-                # f-test using statsmodels
-                try:
-                    p = model.f_test(f_test_r_matrix).pvalue.item()
-                except sm_exceptions.ValueWarning:
-                    p = np.nan
-                res[i, -1] = p
+            try:
+                # full‐model fit
+                design[:, 0:var_size] = var[:, i * var_size : (i + 1) * var_size]
+                model = reg_method(pheno, design)
 
+                # coefficients & SE
+                res[i, 0 : var_size * 2 : 2] = model.params[0:var_size]
+                res[i, 1 : var_size * 2 : 2] = model.bse[0:var_size]
+                res[i, -2] = model.nobs
+
+                if family == "linear":
+                    # F‑test
+                    try:
+                        p = model.f_test(f_test_r_matrix).pvalue.item()
+                    except sm_exceptions.ValueWarning:
+                        p = np.nan
+                    res[i, -1] = p
+
+                else:  # logistic
+                    # reduced model for LRT
+                    model_reduced = reg_method(
+                        pheno,
+                        design[:, reduced_index],
+                        start_params=model.params[reduced_index],
+                    )
+                    res[i, -1] = stats.chi2.sf(
+                        -2 * (model_reduced.llf - model.llf),
+                        model.df_model - model_reduced.df_model,
+                    )
+
+            except (sm_exceptions.ValueWarning, LinAlgError) as e:
+                admix.logger.warning(
+                    f"SNP block‑index {i} skipped due to {type(e).__name__}"
+                )
+                res[i, :] = np.nan
+                continue
+        #here it ends 
+            
             elif family == "logistic":
                 # more than one test variables
                 model_reduced = reg_method(
