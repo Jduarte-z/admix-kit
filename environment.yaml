@@ -1,4 +1,4 @@
-name: admix-kit
+name: admix-kit-jf
 channels:
     - conda-forge
     - bioconda
