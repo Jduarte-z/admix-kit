@@ -10,7 +10,8 @@ import admix
 from statsmodels.tools import sm_exceptions
 import warnings
 import itertools
-from numpy.linalg import LinAlgError #new
+from numpy.linalg import LinAlgError
+
 
 warnings.filterwarnings(action="error", category=sm_exceptions.ValueWarning)
 
@@ -105,37 +106,37 @@ def _block_het_test(
     #     ftest_mat[i, test_vars[i + 1]] = -1
 
     res = np.zeros((n_var, var_size * 2 + 2))
+############################################################################## change
+    for i in range(n_var): 
+        try:
+            design_full[:, 0:var_size] = var[:, i * var_size : (i + 1) * var_size]
+            model_full = reg_method(pheno, design_full)
+            res[i, 0 : var_size * 2 : 2] = model_full.params[0:var_size]
+            res[i, 1 : var_size * 2 : 2] = model_full.bse[0:var_size]
+            res[i, -2] = model_full.nobs
 
-    for i in range(n_var):
-        design_full[:, 0:var_size] = var[:, i * var_size : (i + 1) * var_size]
-        model_full = reg_method(pheno, design_full)
+            design_reduced[:, 0] = var[:, test_vars + i * var_size].sum(axis=1)
+            if len(other_vars) > 0:
+                design_reduced[:, 1:reduced_var_size] = var[:, other_vars + i * var_size]
 
-        # coefficients
-        res[i, 0 : var_size * 2 : 2] = model_full.params[0:var_size]
-        # standard errors
-        res[i, 1 : var_size * 2 : 2] = model_full.bse[0:var_size]
-        res[i, -2] = model_full.nobs
+            model_reduced = reg_method(
+                pheno,
+                design_reduced,
+                start_params=np.concatenate([[0.0], model_full.params[shared_param_index]]),
+            )
 
-        design_reduced[:, 0] = var[:, test_vars + i * var_size].sum(axis=1)
-        if len(other_vars) > 0:
-            design_reduced[:, 1:reduced_var_size] = var[:, other_vars + i * var_size]
-
-        model_reduced = reg_method(
-            pheno,
-            design_reduced,
-            start_params=np.concatenate([[0.0], model_full.params[shared_param_index]]),
-        )
-
-        if family == "linear" or family == "logistic":
             p = stats.chi2.sf(
                 -2 * (model_reduced.llf - model_full.llf),
                 (model_full.df_model - model_reduced.df_model),
             )
             res[i, -1] = p
-        else:
-            raise NotImplementedError
-    return res
 
+        except LinAlgError:
+            admix.logger.warning(f"HET test singular matrix at SNP block {i}, filling NaN")
+            res[i, :] = np.nan
+            continue
+    return res
+############################################################################## change
 
 def _block_test(
     var: np.ndarray,
@@ -243,63 +244,41 @@ def _block_test(
             f_test_r_matrix[i, v] = 1
 
         res = np.zeros((n_var, var_size * 2 + 2))
+############################################################################## change
+    for i in range(n_var):
+        design[:, 0:var_size] = var[:, i * var_size : (i + 1) * var_size]
+        try:
+            # full model
+            model = reg_method(pheno, design)
+            res[i, 0 : var_size * 2 : 2] = model.params[0:var_size]
+            res[i, 1 : var_size * 2 : 2] = model.bse[0:var_size]
+            res[i, -2] = model.nobs
 
-        #here starts the new code suggestion
-        for i in range(n_var):
-            try:
-                # full‐model fit
-                design[:, 0:var_size] = var[:, i * var_size : (i + 1) * var_size]
-                model = reg_method(pheno, design)
-
-                # coefficients & SE
-                res[i, 0 : var_size * 2 : 2] = model.params[0:var_size]
-                res[i, 1 : var_size * 2 : 2] = model.bse[0:var_size]
-                res[i, -2] = model.nobs
-
-                if family == "linear":
-                    # F‑test
-                    try:
-                        p = model.f_test(f_test_r_matrix).pvalue.item()
-                    except sm_exceptions.ValueWarning:
-                        p = np.nan
-                    res[i, -1] = p
-
-                else:  # logistic
-                    # reduced model for LRT
-                    model_reduced = reg_method(
-                        pheno,
-                        design[:, reduced_index],
-                        start_params=model.params[reduced_index],
-                    )
-                    res[i, -1] = stats.chi2.sf(
-                        -2 * (model_reduced.llf - model.llf),
-                        model.df_model - model_reduced.df_model,
-                    )
-
-            except (sm_exceptions.ValueWarning, LinAlgError) as e:
-                admix.logger.warning(
-                    f"SNP block‑index {i} skipped due to {type(e).__name__}"
-                )
-                res[i, :] = np.nan
-                continue
-        #here it ends 
-            
-            elif family == "logistic":
-                # more than one test variables
+            # reduced model (only for logistic)
+            if family == "logistic":
                 model_reduced = reg_method(
                     pheno,
                     design[:, reduced_index],
                     start_params=model.params[reduced_index],
                 )
-                # determine p-values using difference in log-likelihood
-                # and difference in degrees of freedom
                 p = stats.chi2.sf(
                     -2 * (model_reduced.llf - model.llf),
                     (model.df_model - model_reduced.df_model),
                 )
                 res[i, -1] = p
-    return res
+            else:
+                # linear family: F‑test
+                try:
+                    res[i, -1] = model.f_test(f_test_r_matrix).pvalue.item()
+                except sm_exceptions.ValueWarning:
+                    res[i, -1] = np.nan
 
+        except LinAlgError:
+            admix.logger.warning(f"Singular matrix at SNP block {i}, writing NaN and continuing")
+            res[i, :] = np.nan
+            continue
+    return res
+############################################################################## change
 
 def marginal(
     dset: admix.Dataset = None,
